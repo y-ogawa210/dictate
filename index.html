@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>ディクテーション読み上げツール</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 20px auto; padding: 0 16px; }
+    textarea { width: 100%; height: 180px; padding: 8px; font-size: 14px; }
+    .controls { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 10px; }
+    label { font-size: 14px; }
+    select, input[type="number"] { padding: 4px; font-size: 14px; }
+    button { padding: 6px 14px; font-size: 14px; cursor: pointer; }
+    .status { margin-top: 10px; font-size: 13px; color: #555; }
+    #currentItem {
+      margin-top: 15px;
+      padding: 10px;
+      background: #f7f7f7;
+      border-left: 4px solid #0078d4;
+      font-size: 20px;
+      min-height: 40px;
+    }
+    #progressBar {
+      width: 100%;
+      height: 10px;
+      background: #ddd;
+      margin-top: 10px;
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    #progressFill {
+      height: 100%;
+      width: 0%;
+      background: #0078d4;
+      transition: width 0.2s;
+    }
+  </style>
+</head>
+<body>
+
+<h1>ディクテーション読み上げツール</h1>
+
+<textarea id="textInput" placeholder="英文を貼り付けてください"></textarea>
+
+<div class="controls">
+  <label>
+    モード：
+    <select id="mode">
+      <option value="word">単語ごと</option>
+      <option value="sentence">文ごと</option>
+    </select>
+  </label>
+
+  <label>
+    間隔（秒）：
+    <input type="number" id="gapSeconds" value="5" min="0" step="0.5">
+  </label>
+
+  <label>
+    読み上げ速度：
+    <input type="number" id="rate" value="1" min="0.5" max="2" step="0.5">
+  </label>
+
+  <label>
+    音声：
+    <select id="voiceSelect"></select>
+  </label>
+
+  <button id="startBtn">再生開始</button>
+  <button id="pauseBtn">一時停止</button>
+  <button id="resumeBtn">再開</button>
+  <button id="stopBtn">停止</button>
+</div>
+
+<div id="progressBar"><div id="progressFill"></div></div>
+
+<div id="currentItem"></div>
+<div class="status" id="status"></div>
+
+<script>
+  const textInput = document.getElementById('textInput');
+  const modeSelect = document.getElementById('mode');
+  const gapInput = document.getElementById('gapSeconds');
+  const rateInput = document.getElementById('rate');
+  const voiceSelect = document.getElementById('voiceSelect');
+  const statusEl = document.getElementById('status');
+  const currentItemEl = document.getElementById('currentItem');
+  const progressFill = document.getElementById('progressFill');
+
+  let isPlaying = false;
+  let isPaused = false;
+  let currentTimeout = null;
+  let voices = [];
+  let currentIndex = 0;
+  let items = [];
+
+  // --- 音声一覧 ---
+  function loadVoices() {
+    voices = speechSynthesis.getVoices();
+    voiceSelect.innerHTML = "";
+
+    voices
+      .filter(v => v.lang.startsWith("en"))
+      .forEach(v => {
+        const option = document.createElement("option");
+        option.value = v.name;
+        option.textContent = `${v.name} (${v.lang})`;
+        voiceSelect.appendChild(option);
+      });
+  }
+
+  speechSynthesis.onvoiceschanged = loadVoices;
+  window.onload = loadVoices;
+
+  // --- 読み上げ ---
+  function speakText(text, voice, rate) {
+    return new Promise(resolve => {
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.voice = voice;
+      utter.rate = rate;
+      utter.onend = resolve;
+      utter.onerror = resolve;
+      speechSynthesis.speak(utter);
+    });
+  }
+
+  // --- 再生処理 ---
+  async function playItems() {
+    isPlaying = true;
+    isPaused = false;
+
+    const gapMs = parseFloat(gapInput.value) * 1000;
+    const rate = parseFloat(rateInput.value);
+    const voice = voices.find(v => v.name === voiceSelect.value) || null;
+
+    for (; currentIndex < items.length; currentIndex++) {
+      if (!isPlaying) break;
+
+      while (isPaused) {
+        await new Promise(r => setTimeout(r, 200));
+      }
+
+      const item = items[currentIndex];
+      currentItemEl.textContent = item;
+      statusEl.textContent = `再生中：${currentIndex + 1} / ${items.length}`;
+
+      progressFill.style.width = ((currentIndex + 1) / items.length * 100) + "%";
+
+      await speakText(item, voice, rate);
+      if (!isPlaying) break;
+
+      await new Promise(resolve => {
+        currentTimeout = setTimeout(resolve, gapMs);
+      });
+    }
+
+    isPlaying = false;
+    currentIndex = 0;
+    statusEl.textContent = "停止中";
+    progressFill.style.width = "0%";
+  }
+
+  // --- ボタン ---
+  document.getElementById('startBtn').addEventListener('click', () => {
+    const text = textInput.value.trim();
+    if (!text) return alert("英文を入力してください。");
+
+    speechSynthesis.cancel();
+    if (currentTimeout) clearTimeout(currentTimeout);
+
+    const mode = modeSelect.value;
+
+    if (mode === "word") {
+      items = text.replace(/\s+/g, " ").split(" ").filter(Boolean);
+    } else {
+      items = text
+        .replace(/\r?\n+/g, " ")
+        .match(/[^.!?]+[.!?]+|\S+/g)
+        .map(s => s.trim())
+        .filter(Boolean);
+    }
+
+    currentIndex = 0;
+    playItems();
+  });
+
+  document.getElementById('pauseBtn').addEventListener('click', () => {
+    isPaused = true;
+    speechSynthesis.pause();
+    statusEl.textContent = "一時停止中";
+  });
+
+  document.getElementById('resumeBtn').addEventListener('click', () => {
+    isPaused = false;
+    speechSynthesis.resume();
+    statusEl.textContent = "再開";
+  });
+
+  document.getElementById('stopBtn').addEventListener('click', () => {
+    isPlaying = false;
+    isPaused = false;
+    speechSynthesis.cancel();
+    if (currentTimeout) clearTimeout(currentTimeout);
+    currentIndex = 0;
+    currentItemEl.textContent = "";
+    progressFill.style.width = "0%";
+    statusEl.textContent = "停止しました";
+  });
+</script>
+
+</body>
+</html>
